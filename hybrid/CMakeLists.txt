@@ -11,7 +11,7 @@ set(CMAKE_JOB_POOL_LINK link_pool)
 get_filename_component(RRXX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(REXSDK_SOURCE "${RRXX_ROOT}/build/rexglue-sdk" CACHE PATH "ReXGlue SDK source directory")
 set(REXSDK_LIB "${REXSDK_SOURCE}/out/win-amd64" CACHE PATH "Built ReXGlue libraries")
-set(REXGPU_SOURCE "${RRXX_ROOT}/build/rexglue-d3d12" CACHE PATH "Xenos D3D12 plugin source directory")
+set(REXSDK_BUILD "${REXSDK_SOURCE}/out/build/win-amd64" CACHE PATH "ReXGlue SDK build directory containing generated headers")
 set(RRXX_PPC_DIR "${RRXX_ROOT}/generated/ppc" CACHE PATH "Locally generated PPC source directory")
 option(RRXX_SDK_GUEST_CLOCK "Use the SDK guest clock for generated timebase reads" OFF)
 
@@ -21,6 +21,10 @@ if(NOT PPC_SOURCES OR NOT EXISTS "${RRXX_PPC_DIR}/ppc_func_mapping.cpp")
 endif()
 if(NOT EXISTS "${REXSDK_LIB}/rexruntime.lib")
   message(FATAL_ERROR "Build ReXGlue SDK first and set REXSDK_SOURCE/REXSDK_LIB")
+endif()
+if(NOT EXISTS "${REXSDK_BUILD}/include/rex/version.h" OR
+   NOT EXISTS "${REXSDK_LIB}/rexgpu-xenos.dll")
+  message(FATAL_ERROR "Build ReXGlue SDK with the Xenos D3D12 plugin and set REXSDK_BUILD")
 endif()
 
 foreach(source IN LISTS PPC_SOURCES)
@@ -70,6 +74,9 @@ endfunction()
 
 set(RRXX_FADE_BOUNDARY_INPUT "" CACHE FILEPATH "Local regenerated fade-boundary unit")
 set(RRXX_NEW_GAME_BOUNDARY_INPUT "" CACHE FILEPATH "Local regenerated New Game boundary unit")
+if(NOT RRXX_NEW_GAME_BOUNDARY_INPUT)
+  message(FATAL_ERROR "RRXX_NEW_GAME_BOUNDARY_INPUT is required because the host registers that local boundary")
+endif()
 rrxx_add_local_boundary(RRXX_FADE_BOUNDARY_INPUT sub_82062200 local_fade_boundary.cpp)
 rrxx_add_local_boundary(RRXX_NEW_GAME_BOUNDARY_INPUT sub_8214E948 local_new_game_boundary.cpp)
 
@@ -93,7 +100,7 @@ target_link_libraries(rrxx_windowed PRIVATE "${REXSDK_LIB}/rexruntime.lib" "${RE
 target_link_options(rrxx_windowed PRIVATE /MAP)
 target_include_directories(rrxx_windowed PRIVATE
   "${REXSDK_SOURCE}/thirdparty/imgui" "${REXSDK_SOURCE}/thirdparty/sdl3/include"
-  "${REXGPU_SOURCE}/include")
+  "${REXSDK_BUILD}/include")
 target_compile_definitions(rrxx_windowed PRIVATE REXGLUE_BUILD_CONFIG="${CMAKE_BUILD_TYPE}")
 foreach(dll rexruntime rexgpu-xenos)
   add_custom_command(TARGET rrxx_windowed POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different

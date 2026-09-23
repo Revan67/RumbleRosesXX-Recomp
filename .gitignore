@@ -16,6 +16,9 @@
 # User-supplied game content and generated translations
 /game/
 /generated/
+/tools/XenonRecomp/
+/tools/extract-xiso/
+/config/rrxx_switch_tables.toml
 *.iso
 *.xex
 *.xexp
@@ -23,6 +26,7 @@
 *.data
 *.xma
 *.xma2
+*.trace
 *shader_cache*
 
 # Local-only analysis and diagnostics
