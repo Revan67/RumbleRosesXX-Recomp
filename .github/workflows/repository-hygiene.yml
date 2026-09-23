@@ -1,0 +1,17 @@
+name: Repository hygiene
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  guard-private-material:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject private or game-derived artifacts
+        shell: pwsh
+        run: ./scripts/check_repository_hygiene.ps1

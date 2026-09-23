@@ -1,0 +1,26 @@
+[main]
+file_path = "../game/extracted/default.xex"
+out_directory_path = "../build/hybrid-ppc"
+switch_table_file_path = "rrxx_switch_tables.toml"
+
+# Isolated boundary experiment; never replaces the baseline generated tree.
+functions = [
+  { address = 0x82062200, size = 0x10C },
+  { address = 0x8214E948, size = 0x64 },
+]
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+restgprlr_14_address = 0x822CB560
+savegprlr_14_address = 0x822CB510
+restfpr_14_address = 0x822CBF3C
+savefpr_14_address = 0x822CBEF0
+restvmx_14_address = 0x822CDB98
+savevmx_14_address = 0x822CD900
+restvmx_64_address = 0x822CDC2C
+savevmx_64_address = 0x822CD994

@@ -1,0 +1,31 @@
+# Build output and local IDE state
+/build/
+/out/
+/.vs/
+/.vscode/
+*.user
+*.suo
+*.exe
+*.dll
+*.pdb
+*.map
+*.log
+*.dmp
+*.tmp
+
+# User-supplied game content and generated translations
+/game/
+/generated/
+*.iso
+*.xex
+*.xexp
+*.bin
+*.data
+*.xma
+*.xma2
+*shader_cache*
+
+# Local-only analysis and diagnostics
+/research/
+/traces/
+/captures/
