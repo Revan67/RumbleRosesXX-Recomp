@@ -9,7 +9,7 @@ An independent, work-in-progress PC recompilation of *Rumble Roses XX*. This pub
 
 ## Status
 
-The local development build has rendered recognizable in-engine scenes with audio and controller input. Save/load is not verified: selecting Options → Data Save currently makes the menu unresponsive. Clean shutdown and sustained gameplay are also unverified. The public source is an experimental development snapshot, not a packaged game.
+The local development build has rendered recognizable in-engine scenes with audio and controller input. After two local generated-code boundary corrections, Data Save completed twice and a save loaded successfully; this is a checkpoint, not a general compatibility guarantee. Starting a match has subsequently triggered a D3D12 device-hung failure. Clean shutdown and sustained gameplay remain unverified. The public source is an experimental development snapshot, not a packaged game.
 
 ## Game content policy
 

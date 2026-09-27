@@ -74,11 +74,18 @@ endfunction()
 
 set(RRXX_FADE_BOUNDARY_INPUT "" CACHE FILEPATH "Local regenerated fade-boundary unit")
 set(RRXX_NEW_GAME_BOUNDARY_INPUT "" CACHE FILEPATH "Local regenerated New Game boundary unit")
+set(RRXX_SAVE_MENU_BOUNDARY_INPUT "" CACHE FILEPATH "Local regenerated save menu boundary unit")
+set(RRXX_DIALOG_BOUNDARY_INPUT "" CACHE FILEPATH "Local regenerated dialog boundary unit")
 if(NOT RRXX_NEW_GAME_BOUNDARY_INPUT)
   message(FATAL_ERROR "RRXX_NEW_GAME_BOUNDARY_INPUT is required because the host registers that local boundary")
 endif()
+if(NOT RRXX_SAVE_MENU_BOUNDARY_INPUT OR NOT RRXX_DIALOG_BOUNDARY_INPUT)
+  message(FATAL_ERROR "Both local save menu and dialog boundaries are required for the verified save flow")
+endif()
 rrxx_add_local_boundary(RRXX_FADE_BOUNDARY_INPUT sub_82062200 local_fade_boundary.cpp)
 rrxx_add_local_boundary(RRXX_NEW_GAME_BOUNDARY_INPUT sub_8214E948 local_new_game_boundary.cpp)
+rrxx_add_local_boundary(RRXX_SAVE_MENU_BOUNDARY_INPUT sub_82129680 local_save_menu_boundary.cpp)
+rrxx_add_local_boundary(RRXX_DIALOG_BOUNDARY_INPUT sub_821D1810 local_dialog_boundary.cpp)
 
 add_library(rrxx_translated OBJECT ${RRXX_TRANSLATED_SOURCES})
 add_executable(rrxx_windowed WIN32 windowed_main.cpp

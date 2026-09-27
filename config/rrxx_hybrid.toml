@@ -7,6 +7,8 @@ switch_table_file_path = "rrxx_switch_tables.toml"
 functions = [
   { address = 0x82062200, size = 0x10C },
   { address = 0x8214E948, size = 0x64 },
+  { address = 0x82129680, size = 0x108 },
+  { address = 0x821D1810, size = 0x9C },
 ]
 skip_lr = false
 skip_msr = false
