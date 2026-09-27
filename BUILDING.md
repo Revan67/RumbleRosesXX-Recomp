@@ -77,3 +77,5 @@ If CMake selects a non-Windows `ld` instead of the Visual Studio linker, add `-D
 ## 5. Run only as a bounded local experiment
 
 The executable accepts an extracted-game directory and a writable local-state directory. Local testing has saved twice and loaded once, but match start has triggered a D3D12 device-hung failure; do not treat this as a normal game installation. Crash recovery and orderly shutdown are not proven. Keep experiments time- and resource-bounded, and retain all local logs, saves, and captures outside Git. The planned launcher and user-facing ISO import flow do not exist yet.
+
+For a short menu-only smoke test, run `./scripts/test_windowed_boot.ps1` from this repository's root. It limits the observation to 30 seconds by default, stops the process at 2 GiB working set or 16 MiB of logs, and writes logs only under ignored `build/hybrid/`. These process limits cannot prevent a GPU timeout, so do not use this script to repeatedly start a match.
