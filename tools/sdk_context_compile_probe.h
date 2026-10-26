@@ -1,5 +1,6 @@
 #pragma once
-// Retain generated instruction helpers while using SDK register types.
+// Experimental forced include: retain legacy instruction helpers while using
+// SDK register types for the generated function bodies. Compile test only.
 #define PPCContext RRXXLegacyContext
 #define PPCRegister RRXXLegacyRegister
 #define PPCXERRegister RRXXLegacyXER

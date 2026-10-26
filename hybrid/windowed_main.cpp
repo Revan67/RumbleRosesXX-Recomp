@@ -21,9 +21,21 @@
 #include "ppc_recomp_shared.h"
 #include "local_boundaries.h"
 #include "translated_base.h"
+#ifdef RRXX_FULL_GUEST_TRACE
+#include "guest_trace.h"
+#endif
+
+extern "C" void rrxx_trace_indirect(uint32_t caller, uint32_t target);
+
 void rrxx_hybrid_indirect(PPCContext& ctx, uint8_t* base, uint32_t address) {
     ctx.fpscr.InitHost();
     ctx.last_indirect_target = address;
+    const auto caller = static_cast<uint32_t>(ctx.lr);
+    rrxx_trace_indirect(caller, address);
+    if (caller == 0x821161C4 || caller == 0x821161E0 || caller == 0x821161FC) {
+        REXLOG_INFO("New Game dispatch: target={:08X} LR={:08X} object={:08X} arg4={:08X}",
+                    address, caller, ctx.r3.u32, ctx.r4.u32);
+    }
     auto* runtime = rex::Runtime::instance();
     auto* function = runtime && address && !(address & 3)
         ? runtime->function_dispatcher()->GetFunction(address) : nullptr;
@@ -62,6 +74,9 @@ class RRXXWindowedApp final : public rex::ReXApp {
 
  protected:
     void OnPreSetup(rex::RuntimeConfig& config) override {
+#ifdef RRXX_FULL_GUEST_TRACE
+        rrxx_guest_trace_start_from_env();
+#endif
         config.graphics = rex::system::LoadGpuPlugin("xenos", "d3d12");
         if (!config.graphics) {
             std::fprintf(stderr, "Cannot load the Xenos D3D12 plugin\n");

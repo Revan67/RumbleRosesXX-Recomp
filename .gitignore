@@ -1,35 +1,60 @@
-# Build output and local IDE state
+# Build products and local IDE state
 /build/
 /out/
 /.vs/
 /.vscode/
+/.idea/
 *.user
 *.suo
+*.VC.db
+*.VC.opendb
+*.log
+*.map
+*.pdb
+*.ilk
+*.obj
 *.exe
 *.dll
-*.pdb
-*.map
-*.log
-*.dmp
-*.tmp
 
-# User-supplied game content and generated translations
+# Legally supplied game media and extracted assets
 /game/
-/generated/
-/tools/XenonRecomp/
-/tools/extract-xiso/
-/config/rrxx_switch_tables.toml
+/Rumble Roses XX (USA) (En,Ja)/
 *.iso
 *.xex
 *.xexp
 *.bin
 *.data
+
+# XEX-derived recompilation output. Regenerate locally from a legal dump.
+/generated/
+/config/rrxx_switch_tables.toml
+*shader_cache*
+*.dxbc
+*.dxil
+*.spv
 *.xma
 *.xma2
-*.trace
-*shader_cache*
 
-# Local-only analysis and diagnostics
+# Local tool checkouts; exact acquisition is documented in README.md.
+/tools/XenonRecomp/
+/tools/extract-xiso/
+/tools/xenia-reference/
+
+# Temporary diagnostics and caches
+*.trace
+*.etl
+*.dmp
+*.tmp
+/.cache/
+
+# Private evidence and workspace-specific guidance remain local.
 /research/
 /traces/
 /captures/
+/AGENTS.md
+/docs/*
+!/docs/FIRST_PLAYABLE_CHECKPOINT.md
+/tools/audit_translation_coverage.ps1
+/tools/ghidra/
+*.bundle
+*.sqlite

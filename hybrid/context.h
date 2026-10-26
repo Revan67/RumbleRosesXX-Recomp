@@ -1,5 +1,5 @@
 #pragma once
-#include "legacy_context_compat.h"
+#include "../tools/sdk_context_compile_probe.h"
 // SDK kernel exports have C linkage; generated direct-call declarations must match.
 #undef PPC_EXTERN_FUNC
 #define PPC_EXTERN_FUNC(x) extern "C" PPC_FUNC(x)

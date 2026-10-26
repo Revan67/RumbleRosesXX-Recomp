@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Reject private or game-derived artifacts
         shell: pwsh
         run: ./scripts/check_repository_hygiene.ps1
