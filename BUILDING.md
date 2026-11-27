@@ -23,6 +23,12 @@ cmake --build tools/XenonRecomp/build --target XenonAnalyse XenonRecomp --parall
 git clone --recursive https://github.com/rexglue/rexglue-sdk.git build/rexglue-sdk
 git -C build/rexglue-sdk checkout c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
 git -C build/rexglue-sdk submodule update --init --recursive
+foreach ($patch in Get-ChildItem patches/rexglue-sdk -Filter '*.patch' | Sort-Object Name) {
+  git -C build/rexglue-sdk apply --check $patch.FullName
+  if ($LASTEXITCODE -ne 0) { throw "SDK patch check failed: $($patch.Name)" }
+  git -C build/rexglue-sdk apply $patch.FullName
+  if ($LASTEXITCODE -ne 0) { throw "SDK patch failed: $($patch.Name)" }
+}
 Push-Location build/rexglue-sdk
 try {
   cmake --preset win-amd64
@@ -31,6 +37,20 @@ try {
 ```
 
 The SDK should produce libraries under `build/rexglue-sdk/out/win-amd64`, DLLs there or under its `Release` subdirectory, plus the generated header `out/build/win-amd64/include/rex/version.h`. ReXGlue and its GPU plugin remain separate dependencies under their own license and notices; they are not copied into this repository.
+
+If a clean SDK places `rexruntime.lib` and `fmt.lib` in `out/win-amd64/Release`,
+set `REXSDK_LIB` to that directory in the host configure command. For an isolated
+host build, point `REXSDK_SOURCE`, `REXSDK_BUILD`, `REXSDK_LIB`, and
+`REXSDK_RUNTIME_DIR` at the same SDK build and use a separate host output
+directory. Do not mix import libraries from one build with DLLs from another.
+
+When overriding compiler locations in PowerShell, pass each entire CMake cache
+assignment as one argument, for example `"-DCMAKE_CXX_COMPILER=$clangPath"`.
+Do not build a nested shell command with embedded compiler-path quotes: a path
+containing spaces can otherwise become a broken `C:/Program` cache entry. If a
+configure attempt already produced that malformed cache, preserve it for
+diagnosis and configure a separate build directory with `-B`; do not reuse the
+damaged compiler-detection files or delete a known-good build.
 
 ## 3. Analyze and translate your game locally
 
@@ -79,7 +99,7 @@ If CMake selects a non-Windows `ld` instead of the Visual Studio linker, add `-D
 
 The executable accepts an extracted-game directory and a writable local-state directory. Local testing has saved twice and loaded once, and one bounded match was played with additional local corrections and a modified GPU plugin. Crash recovery, full-match completion and orderly shutdown are not proven. Keep experiments time- and resource-bounded, and retain all local logs, saves, and captures outside Git. The planned launcher and user-facing ISO import flow do not exist yet.
 
-For a short menu-only smoke test, run `./tools/test_windowed_boot.ps1 -ObservationSeconds 30` from this repository's root. It stops the process at 2 GiB working set or 16 MiB of logs and writes logs only under ignored `build/hybrid/`. These process limits cannot prevent a GPU timeout. Interactive GPU-risk testing requires an available user; do not repeatedly provoke device loss.
+For a short menu-only smoke test, run `./tools/test_windowed_boot.ps1 -ObservationSeconds 30 -MemoryLimitGiB 2 -LogLimitMiB 16` from this repository's root. The extended-test defaults are 8 GiB working set and 64 MiB of text logs; both limits can be lowered explicitly. Logs stay under ignored `build/hybrid/`. The timer defaults to 120 seconds and accepts up to 1800 seconds. These process limits cannot prevent a GPU timeout. Interactive GPU-risk testing requires an available user; do not repeatedly provoke device loss.
 
 ## 6. First-playable boundary corrections and limits
 
@@ -115,14 +135,40 @@ host compatibility repair, not a claim of complete Xbox context equivalence.
 Runtime DLLs are synchronized every windowed build. If SDK DLLs are in a
 `Release` subdirectory, set `REXSDK_RUNTIME_DIR` to that directory.
 
-**Reproducibility limit:** the successful local match also used an experimental
-SDK shader change (`dxbc_safe_relative_constants`) that is not included in this
-repository. Stock SDK builds do not supply that option. Do not pass
-`-SafeRelativeConstants` without a compatible separately reviewed SDK build.
-The public sources therefore do not yet provide a fully reproducible recipe
-for the exact first-playable GPU configuration. They do include the native
-nonlocal repair, local boundary preparation and synthetic nonlocal test.
+**Reproducibility limit:** the successful local match also used the experimental
+SDK shader change `dxbc_safe_relative_constants`. It is now preserved in the
+[pinned SDK patch package](patches/rexglue-sdk/README.md), applied in step 2.
+The patches reproduce all 16 modified source blobs from the pinned Git tree.
+A separate clean SDK Release compilation from that package now passes with
+Clang 19.1.5 and two jobs, using existing dependency sources. A separate host
+build using those DLLs passed offline tests and was used for user-confirmed
+save/load, match play and a later restart/load check. This is narrow route
+coverage, not full-game correctness or a turnkey independent installation test.
+Stock SDK builds without the patches do not supply this option.
 
-Full guest tracing and GPU draw-journal options likewise depend on separate
-local instrumentation; their presence in the launcher does not mean a stock
-dependency contains it. Never upload captured payloads to GitHub.
+The GPU draw journal and GPU validation option are included in the SDK patch
+package. Full guest tracing also requires the host's trace-enabled build option;
+launcher flags alone do not add instrumentation to a stock dependency. Never
+upload captured payloads to GitHub.
+
+With the patched SDK and all local overlays built, the checkpoint route uses:
+
+```powershell
+./tools/test_windowed_boot.ps1 -ObservationSeconds 120 -GpuDebug -SafeRelativeConstants -ContextTrace
+```
+
+Arrange an attended test; desktop disruption remains possible. This command
+does not itself prove arrival in gameplay or clean termination.
+
+For the local clean-SDK validation build, add `-CleanSdkCandidate` to explicitly
+select `build/research/host-clean-sdk-validation`. It verifies the adjacent DLLs
+against the isolated SDK build record and keeps saves, caches and logs in the
+candidate directory. It does not copy existing saves. Add `-PreflightOnly` to
+check paths, identities and limits without starting the game. Omitting the
+candidate switch preserves the existing default build selection.
+
+Keep `-CleanSdkCandidate` when reopening that candidate's existing saves; omit
+only `-FreshState`. Omitting the candidate switch selects the older build and
+its different state directory. The candidate option is a local development
+convenience and requires the corresponding isolated build and local SDK identity
+record; it is not a public packaged installation.

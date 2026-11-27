@@ -7,7 +7,7 @@ set(CMAKE_JOB_POOL_COMPILE compile_pool)
 set(CMAKE_JOB_POOL_LINK link_pool)
 get_filename_component(RRXX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(REXSDK_SOURCE "${RRXX_ROOT}/build/rexglue-sdk" CACHE PATH "Built SDK source")
-set(REXSDK_LIB "${REXSDK_SOURCE}/out/win-amd64")
+set(REXSDK_LIB "${REXSDK_SOURCE}/out/win-amd64" CACHE PATH "Directory containing the SDK import and static libraries")
 set(REXSDK_BUILD "${REXSDK_SOURCE}/out/build/win-amd64" CACHE PATH "SDK build directory containing generated headers")
 set(RRXX_DEFAULT_SDK_RUNTIME_DIR "${REXSDK_LIB}")
 if(EXISTS "${REXSDK_LIB}/Release/rexruntime.dll" AND

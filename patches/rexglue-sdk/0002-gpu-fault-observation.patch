@@ -1,0 +1,497 @@
+diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
+index 96d362b3e7c1223a54ffec80d607b9484e20887d..f75541bab0e5b7633922b12ef40f40ffa2560ce3 100644
+--- a/include/rex/graphics/d3d12/command_processor.h
++++ b/include/rex/graphics/d3d12/command_processor.h
+@@ -25,6 +25,7 @@
+ #include <rex/assert.h>
+ #include <rex/graphics/command_processor.h>
+ #include <rex/graphics/d3d12/deferred_command_list.h>
++#include <rex/graphics/d3d12/draw_journal.h>
+ #include <rex/graphics/d3d12/graphics_system.h>
+ #include <rex/graphics/d3d12/pipeline_cache.h>
+ #include <rex/graphics/d3d12/primitive_processor.h>
+@@ -420,6 +421,27 @@ class D3D12CommandProcessor : public CommandProcessor {
+ 
+   bool device_removed_ = false;
+ 
++  // Local bounded diagnostics for draw bindings preceding device removal.
++  struct IndexedDrawDiagnostic {
++    uint64_t submission = 0;
++    uint64_t frame = 0;
++    D3D12_GPU_VIRTUAL_ADDRESS index_address = 0;
++    uint32_t index_bytes = 0;
++    uint32_t index_count = 0;
++    uint32_t index_type = 0;
++    uint64_t vertex_shader_hash = 0;
++    uint64_t pixel_shader_hash = 0;
++    // GPU addresses only, no shader or guest-memory payloads.
++    std::array<D3D12_GPU_VIRTUAL_ADDRESS, 7> constant_buffers{};
++    std::array<uint32_t, 7> constant_buffer_bytes{};
++    uint32_t dynamic_float_mask = 0;
++  };
++  static constexpr size_t kIndexedDrawDiagnosticCount = 4096;
++  std::array<IndexedDrawDiagnostic, kIndexedDrawDiagnosticCount> indexed_draw_diagnostics_{};
++  uint64_t indexed_draw_diagnostic_count_ = 0;
++  static_assert(sizeof(IndexedDrawDiagnostic) == 144);
++  DrawJournal<IndexedDrawDiagnostic> indexed_draw_journal_;
++
+   bool cache_clear_requested_ = false;
+ 
+   HANDLE fence_completion_event_ = nullptr;
+diff --git a/include/rex/graphics/d3d12/draw_journal.h b/include/rex/graphics/d3d12/draw_journal.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..360f9c2bff1cab0d0ff9b6a49205e8fb8b695634
+--- /dev/null
++++ b/include/rex/graphics/d3d12/draw_journal.h
+@@ -0,0 +1,56 @@
++#pragma once
++// Local experimental observer. One writer; inspect only after process exit.
++#include <Windows.h>
++#include <cstdint>
++#include <cstring>
++namespace rex::graphics::d3d12 {
++template<class T, uint32_t Capacity=4096> class DrawJournal {
++ struct Header {
++  uint32_t magic,version,record_bytes,capacity;
++  uint64_t reserved;
++  volatile LONG64 next;
++ };
++ struct Entry { volatile LONG64 sequence; T value; };
++ static_assert(sizeof(Header)==32);
++ HANDLE file_=INVALID_HANDLE_VALUE, mapping_=nullptr;
++ Header* header_=nullptr;
++ bool attempted_=false;
++ public:
++ DrawJournal()=default;
++ DrawJournal(const DrawJournal&)=delete;
++ DrawJournal& operator=(const DrawJournal&)=delete;
++ ~DrawJournal() {
++  if(header_) { FlushViewOfFile(header_,0); UnmapViewOfFile(header_); }
++  if(mapping_) CloseHandle(mapping_);
++  if(file_!=INVALID_HANDLE_VALUE) CloseHandle(file_);
++ }
++ bool Write(const T& value) {
++  if(!attempted_) {
++   attempted_=true;
++   wchar_t path[32768];
++   DWORD n=GetEnvironmentVariableW(L"RRXX_DRAW_JOURNAL",path,32768);
++   if(!n||n>=32768)return false;
++   file_=CreateFileW(path,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
++   if(file_==INVALID_HANDLE_VALUE)return false;
++   constexpr uint64_t bytes=sizeof(Header)+uint64_t(Capacity)*sizeof(Entry);
++   mapping_=CreateFileMappingW(file_,nullptr,PAGE_READWRITE,DWORD(bytes>>32),DWORD(bytes),nullptr);
++   if(!mapping_)return false;
++   header_=static_cast<Header*>(MapViewOfFile(mapping_,FILE_MAP_WRITE,0,0,bytes));
++   if(!header_)return false;
++   std::memset(header_,0,size_t(bytes));
++   header_->version=1;header_->record_bytes=sizeof(Entry);header_->capacity=Capacity;
++   auto* entries=reinterpret_cast<Entry*>(header_+1);
++   for(uint32_t i=0;i<Capacity;i++)entries[i].sequence=-1;
++   MemoryBarrier();header_->magic=0x4A445252; // RRDJ
++  }
++  if(!header_)return false;
++  LONG64 sequence=header_->next;
++  auto& entry=reinterpret_cast<Entry*>(header_+1)[uint64_t(sequence)%Capacity];
++  InterlockedExchange64(&entry.sequence,-1);
++  std::memcpy(&entry.value,&value,sizeof(T));
++  InterlockedExchange64(&entry.sequence,sequence);
++  InterlockedExchange64(&header_->next,sequence+1);
++  return true;
++ }
++};
++}
+diff --git a/include/rex/ui/d3d12/d3d12_upload_buffer_pool.h b/include/rex/ui/d3d12/d3d12_upload_buffer_pool.h
+index 0e33a656b6960ce1d61883c722c8ac57a13cceac..f6fefca13b7d4a5b77930b8560a294bbfba489ed 100644
+--- a/include/rex/ui/d3d12/d3d12_upload_buffer_pool.h
++++ b/include/rex/ui/d3d12/d3d12_upload_buffer_pool.h
+@@ -41,6 +41,7 @@ class D3D12UploadBufferPool : public GraphicsUploadBufferPool {
+   };
+ 
+   const D3D12Provider& provider_;
++  uint32_t diagnostic_pages_logged_ = 0;
+ };
+ 
+ }  // namespace rex::ui::d3d12
+diff --git a/include/rex/ui/d3d12/d3d12_util.h b/include/rex/ui/d3d12/d3d12_util.h
+index 364690dd7790c1e9de1233ec283b0e3551739c63..d269f58fb818cdcecdb1cdea3201f21962d68061 100644
+--- a/include/rex/ui/d3d12/d3d12_util.h
++++ b/include/rex/ui/d3d12/d3d12_util.h
+@@ -18,6 +18,10 @@
+ namespace rex::ui::d3d12 {
+ namespace util {
+ 
++// Passive device-level capture usable by both presentation and GPU threads.
++// Returns the reported page-fault VA, or zero if unavailable.
++uint64_t LogDeviceRemovalEvidence(ID3D12Device* device);
++
+ using DescriptorCpuGpuHandlePair =
+     std::pair<D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE>;
+ 
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 19874a530dbe3d4bedf78053442d5b34695fef24..f8c7af2612d4113d7e050f41bdc151e54be30cd8 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -31,6 +31,7 @@
+ #include <rex/memory/utils.h>
+ #include <rex/ui/d3d12/d3d12_presenter.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
++#include <rex/ui/flags.h>
+ 
+ REXCVAR_DEFINE_BOOL(d3d12_bindless, true, "GPU/D3D12", "Use bindless resources where available")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+@@ -746,6 +747,9 @@ ID3D12Resource* D3D12CommandProcessor::RequestScratchGPUBuffer(uint32_t size,
+   if (scratch_buffer_ != nullptr) {
+     resources_for_deletion_.emplace_back(submission_current_, scratch_buffer_);
+   }
++  buffer->SetName(L"Scratch GPU buffer");
++  REXGPU_INFO("Scratch GPU buffer VA: 0x{:016X} size=0x{:X}",
++              buffer->GetGPUVirtualAddress(), size);
+   scratch_buffer_ = buffer;
+   scratch_buffer_size_ = size;
+   scratch_buffer_state_ = state;
+@@ -945,6 +949,10 @@ bool D3D12CommandProcessor::SetupContext() {
+   constant_buffer_pool_ = std::make_unique<ui::d3d12::D3D12UploadBufferPool>(
+       provider, std::max(ui::d3d12::D3D12UploadBufferPool::kDefaultPageSize,
+                          sizeof(float) * 4 * D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT));
++  if (REXCVAR_GET(d3d12_debug)) {
++    REXGPU_INFO("Draw constant upload pool: 0x{:016X}",
++                reinterpret_cast<uintptr_t>(constant_buffer_pool_.get()));
++  }
+   if (bindless_resources_used_) {
+     D3D12_DESCRIPTOR_HEAP_DESC view_bindless_heap_desc;
+     view_bindless_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+@@ -2687,6 +2695,38 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+     SubmitBarriers();
+     PROFILE_DRAW_CALL();
+     PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
++    const auto diagnostic_address = [](const ConstantBufferBinding& binding) {
++      return binding.up_to_date ? binding.address : D3D12_GPU_VIRTUAL_ADDRESS(0);
++    };
++    indexed_draw_diagnostics_[indexed_draw_diagnostic_count_ % kIndexedDrawDiagnosticCount] = {
++        submission_current_, frame_current_, index_buffer_view.BufferLocation,
++        index_buffer_view.SizeInBytes,
++        primitive_processing_result.host_draw_vertex_count,
++        static_cast<uint32_t>(primitive_processing_result.index_buffer_type),
++        vertex_shader->ucode_data_hash(), pixel_shader ? pixel_shader->ucode_data_hash() : 0,
++        {diagnostic_address(cbuffer_binding_system_), diagnostic_address(cbuffer_binding_float_vertex_),
++         diagnostic_address(cbuffer_binding_float_pixel_), diagnostic_address(cbuffer_binding_bool_loop_),
++         diagnostic_address(cbuffer_binding_fetch_),
++         bindless_resources_used_ ? diagnostic_address(cbuffer_binding_descriptor_indices_vertex_) : 0,
++         bindless_resources_used_ ? diagnostic_address(cbuffer_binding_descriptor_indices_pixel_) : 0},
++        {uint32_t(sizeof(system_constants_)),
++         16u * std::max(uint32_t(1), uint32_t(vertex_shader->constant_register_map().float_count)),
++         16u * std::max(uint32_t(1), pixel_shader ? uint32_t(pixel_shader->constant_register_map().float_count) : 0u),
++         160u, 768u,
++         uint32_t(4 * std::max(size_t(1), vertex_shader->GetTextureBindingsAfterTranslation().size() +
++                                            vertex_shader->GetSamplerBindingsAfterTranslation().size())),
++         pixel_shader ? uint32_t(4 * std::max(size_t(1), pixel_shader->GetTextureBindingsAfterTranslation().size() +
++                                                          pixel_shader->GetSamplerBindingsAfterTranslation().size())) : 4u},
++        uint32_t(vertex_shader->constant_register_map().float_dynamic_addressing) |
++            (pixel_shader && pixel_shader->constant_register_map().float_dynamic_addressing ? 2u : 0u)};
++    // Publish independently of device-removal callbacks; never read the worker
++    // ring from the presentation thread. Mapping is bounded and opt-in.
++    const bool journal_written = indexed_draw_journal_.Write(
++        indexed_draw_diagnostics_[indexed_draw_diagnostic_count_ % kIndexedDrawDiagnosticCount]);
++    if (!indexed_draw_diagnostic_count_ && GetEnvironmentVariableW(L"RRXX_DRAW_JOURNAL", nullptr, 0)) {
++      REXGPU_INFO("Indexed draw journal initialized: {}", journal_written);
++    }
++    ++indexed_draw_diagnostic_count_;
+     deferred_command_list_.D3DDrawIndexedInstanced(
+         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
+     if (scratch_index_buffer != nullptr) {
+@@ -3216,34 +3256,68 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
+   REXGPU_ERROR("D3D12 device removed: HRESULT 0x{:08X} - {}", static_cast<unsigned>(reason),
+                reason_str);
+ 
+-  Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedData> dred;
+-  if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dred)))) {
+-    return;
+-  }
+-
+-  D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs = {};
+-  if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&breadcrumbs))) {
+-    for (const D3D12_AUTO_BREADCRUMB_NODE* node = breadcrumbs.pHeadAutoBreadcrumbNode; node;
+-         node = node->pNext) {
+-      if (!node->pLastBreadcrumbValue || !node->pCommandHistory ||
+-          *node->pLastBreadcrumbValue == 0) {
+-        continue;
++  const uint64_t fault_address = ui::d3d12::util::LogDeviceRemovalEvidence(device);
++  if (fault_address) {
++    const uint64_t available = std::min<uint64_t>(indexed_draw_diagnostic_count_,
++                                                   kIndexedDrawDiagnosticCount);
++    uint32_t matching_draws = 0;
++    for (uint64_t age = available; age > 0; --age) {
++      const uint64_t sequence = indexed_draw_diagnostic_count_ - age;
++      const auto& draw = indexed_draw_diagnostics_[sequence % kIndexedDrawDiagnosticCount];
++      if (fault_address >= draw.index_address &&
++          fault_address - draw.index_address < draw.index_bytes) {
++        REXGPU_ERROR("DRED fault VA within index view: draw={} submission={} frame={} "
++                     "VA=0x{:016X} bytes={} indices={} type={}",
++                     sequence, draw.submission, draw.frame, draw.index_address,
++                     draw.index_bytes, draw.index_count, draw.index_type);
++        if (++matching_draws == 16) break;
+       }
+-      REXGPU_ERROR("DRED breadcrumb: completed {} of {} ops", *node->pLastBreadcrumbValue,
+-                   node->BreadcrumbCount);
+-      uint32_t last = std::min(*node->pLastBreadcrumbValue, node->BreadcrumbCount);
+-      uint32_t start = last > 3 ? last - 3 : 0;
+-      uint32_t end = std::min(last + 1, node->BreadcrumbCount);
+-      for (uint32_t i = start; i < end; i++) {
+-        REXGPU_ERROR("  [{}] op type {}{}", i, static_cast<int>(node->pCommandHistory[i]),
+-                     i == last ? " <-- FAULT" : "");
++    }
++    if (!matching_draws) {
++      REXGPU_ERROR("DRED fault VA not within any of {} retained index views", available);
++    }
++    // Search the full retained window rather than attribute the fault to the
++    // last CPU draw. A preceding binding is a candidate, not proof of access.
++    constexpr const char* roles[] = {"system", "float_vs", "float_ps", "bool_loop",
++                                     "fetch", "descriptors_vs", "descriptors_ps"};
++    for (uint32_t role = 0; role < 7; ++role) {
++      uint64_t best_sequence = UINT64_MAX;
++      uint64_t best_gap = UINT64_MAX;
++      for (uint64_t age = available; age > 0; --age) {
++        const uint64_t sequence = indexed_draw_diagnostic_count_ - age;
++        const auto& draw = indexed_draw_diagnostics_[sequence % kIndexedDrawDiagnosticCount];
++        const auto address = draw.constant_buffers[role];
++        if (address && address <= fault_address && fault_address - address <= best_gap) {
++          best_sequence = sequence;
++          best_gap = fault_address - address;
++        }
++      }
++      if (best_sequence != UINT64_MAX) {
++        const auto& draw = indexed_draw_diagnostics_[best_sequence % kIndexedDrawDiagnosticCount];
++        REXGPU_ERROR("Nearest retained constant role={}: draw={} submission={} frame={} "
++                     "VA={:016X} requested_bytes={} fault_gap=0x{:X} within_request={} "
++                     "VS={:016X} PS={:016X} dynamic_float_mask={}",
++                     roles[role], best_sequence, draw.submission, draw.frame,
++                     draw.constant_buffers[role], draw.constant_buffer_bytes[role], best_gap,
++                     best_gap < draw.constant_buffer_bytes[role], draw.vertex_shader_hash,
++                     draw.pixel_shader_hash, draw.dynamic_float_mask);
+       }
+     }
+-  }
+-
+-  D3D12_DRED_PAGE_FAULT_OUTPUT page_fault = {};
+-  if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&page_fault)) && page_fault.PageFaultVA != 0) {
+-    REXGPU_ERROR("DRED page fault at VA 0x{:016X}", page_fault.PageFaultVA);
++    for (uint64_t age = std::min<uint64_t>(available, 8); age > 0; --age) {
++      const uint64_t sequence = indexed_draw_diagnostic_count_ - age;
++      const auto& draw = indexed_draw_diagnostics_[sequence % kIndexedDrawDiagnosticCount];
++      REXGPU_ERROR("Recent indexed draw {}: submission={} frame={} VA=0x{:016X} "
++                   "bytes={} indices={} type={}",
++                   sequence, draw.submission, draw.frame, draw.index_address,
++                   draw.index_bytes, draw.index_count, draw.index_type);
++      REXGPU_ERROR("Draw {} bindings: VS={:016X} PS={:016X} system={:016X} "
++                   "float_vs={:016X} float_ps={:016X} bool_loop={:016X} "
++                   "fetch={:016X} descriptors_vs={:016X} descriptors_ps={:016X}",
++                   sequence, draw.vertex_shader_hash, draw.pixel_shader_hash,
++                   draw.constant_buffers[0], draw.constant_buffers[1], draw.constant_buffers[2],
++                   draw.constant_buffers[3], draw.constant_buffers[4], draw.constant_buffers[5],
++                   draw.constant_buffers[6]);
++    }
+   }
+ }
+ 
+diff --git a/src/graphics/d3d12/primitive_processor.cpp b/src/graphics/d3d12/primitive_processor.cpp
+index 500924eba651529a397146a26d0b25d43110d80f..af7975d4675556e8f6f7aad4f1a344e68d21ac82 100644
+--- a/src/graphics/d3d12/primitive_processor.cpp
++++ b/src/graphics/d3d12/primitive_processor.cpp
+@@ -130,6 +130,9 @@ bool D3D12PrimitiveProcessor::InitializeBuiltinIndexBuffer(
+   // Successfully created the buffer and wrote the data to upload.
+   builtin_index_buffer_ = std::move(draw_resource);
+   builtin_index_buffer_gpu_address_ = builtin_index_buffer_->GetGPUVirtualAddress();
++  builtin_index_buffer_->SetName(L"Built-in index buffer");
++  REXGPU_INFO("Built-in index buffer VA: 0x{:016X} size=0x{:X}",
++              builtin_index_buffer_gpu_address_, size_bytes);
+   builtin_index_buffer_upload_ = std::move(upload_resource);
+   // Schedule uploading in the first submission.
+   builtin_index_buffer_upload_submission_ = UINT64_MAX;
+diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
+index dd321a5f5820d7f1f0d5958a7d66485e7403669a..a8952e4c8d782ca3b85cb02ead089b9788ac002e 100644
+--- a/src/graphics/d3d12/render_target_cache.cpp
++++ b/src/graphics/d3d12/render_target_cache.cpp
+@@ -222,6 +222,8 @@ bool D3D12RenderTargetCache::Initialize() {
+     return false;
+   }
+   edram_buffer_->SetName(L"EDRAM Buffer");
++  REXGPU_INFO("EDRAM buffer GPU VA: 0x{:016X} size=0x{:X}",
++              edram_buffer_->GetGPUVirtualAddress(), edram_buffer_size);
+   edram_buffer_modification_status_ = EdramBufferModificationStatus::kUnmodified;
+ 
+   // Create non-shader-visible descriptors of the EDRAM buffer for copying.
+diff --git a/src/graphics/d3d12/shared_memory.cpp b/src/graphics/d3d12/shared_memory.cpp
+index a5c97a05fb0f98e0fbcaa5e48de70558506d019d..23acf218ed997a67ef6038aaa6772f17ee8ede4f 100644
+--- a/src/graphics/d3d12/shared_memory.cpp
++++ b/src/graphics/d3d12/shared_memory.cpp
+@@ -78,7 +78,10 @@ bool D3D12SharedMemory::Initialize() {
+       return false;
+     }
+   }
++  buffer_->SetName(L"Guest shared memory");
+   buffer_gpu_address_ = buffer_->GetGPUVirtualAddress();
++  REXGPU_INFO("Guest shared memory GPU VA: 0x{:016X} size=0x{:X}",
++              buffer_gpu_address_, kBufferSize);
+   buffer_uav_writes_commit_needed_ = false;
+ 
+   D3D12_DESCRIPTOR_HEAP_DESC buffer_descriptor_heap_desc;
+diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
+index 306118eec4e23646e5bacb77aa0b9468e60b6137..6e7e18b6868c8e2886de4229ac77b40ab4a41f71 100644
+--- a/src/ui/d3d12/d3d12_presenter.cpp
++++ b/src/ui/d3d12/d3d12_presenter.cpp
+@@ -1164,8 +1164,14 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
+   paint_context_.present_submission_tracker.NextSubmission();
+   switch (present_result) {
+     case DXGI_ERROR_DEVICE_REMOVED:
++      REXLOG_ERROR("D3D12 Present reported DEVICE_REMOVED; device reason 0x{:08X}",
++                   static_cast<uint32_t>(provider_.GetDevice()->GetDeviceRemovedReason()));
++        util::LogDeviceRemovalEvidence(provider_.GetDevice());
+       return PaintResult::kGpuLostExternally;
+     case DXGI_ERROR_DEVICE_RESET:
++      REXLOG_ERROR("D3D12 Present reported DEVICE_RESET; device reason 0x{:08X}",
++                   static_cast<uint32_t>(provider_.GetDevice()->GetDeviceRemovedReason()));
++        util::LogDeviceRemovalEvidence(provider_.GetDevice());
+       return PaintResult::kGpuLostResponsible;
+     default:
+       return SUCCEEDED(present_result) ? PaintResult::kPresented : PaintResult::kNotPresented;
+diff --git a/src/ui/d3d12/d3d12_provider.cpp b/src/ui/d3d12/d3d12_provider.cpp
+index bf8252b10fe920d1ade24fc1846612a3ce916553..17c98ba6e2d611f2ef8db7531536a2d8fd7afebc 100644
+--- a/src/ui/d3d12/d3d12_provider.cpp
++++ b/src/ui/d3d12/d3d12_provider.cpp
+@@ -23,6 +23,10 @@
+ REXCVAR_DEFINE_BOOL(d3d12_debug, false, "UI/D3D12", "Enable Direct3D 12 and DXGI debug layer")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+ 
++REXCVAR_DEFINE_BOOL(d3d12_gpu_validation, false, "UI/D3D12",
++                    "Enable the slow Direct3D 12 GPU-based validation layer")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ REXCVAR_DEFINE_BOOL(d3d12_break_on_error, false, "UI/D3D12",
+                     "Break on Direct3D 12 validation errors");
+ 
+@@ -222,6 +226,15 @@ bool D3D12Provider::Initialize() {
+     ID3D12Debug* debug_interface;
+     if (SUCCEEDED(pfn_d3d12_get_debug_interface_(IID_PPV_ARGS(&debug_interface)))) {
+       debug_interface->EnableDebugLayer();
++      if (REXCVAR_GET(d3d12_gpu_validation)) {
++        Microsoft::WRL::ComPtr<ID3D12Debug1> gpu_validation;
++        if (SUCCEEDED(debug_interface->QueryInterface(IID_PPV_ARGS(&gpu_validation)))) {
++          gpu_validation->SetEnableGPUBasedValidation(TRUE);
++          REXLOG_WARN("D3D12 GPU-based validation enabled; expect significant slowdown");
++        } else {
++          REXLOG_WARN("D3D12 GPU-based validation is unavailable");
++        }
++      }
+       debug_interface->Release();
+     } else {
+       REXLOG_WARN("Failed to enable the Direct3D 12 debug layer");
+diff --git a/src/ui/d3d12/d3d12_upload_buffer_pool.cpp b/src/ui/d3d12/d3d12_upload_buffer_pool.cpp
+index ade5dd2b6a0a36796f87ec4cb76408d6e0c5eac9..b1b0ffaa8a912b8692823773a5c90fcf955e01f9 100644
+--- a/src/ui/d3d12/d3d12_upload_buffer_pool.cpp
++++ b/src/ui/d3d12/d3d12_upload_buffer_pool.cpp
+@@ -10,10 +10,13 @@
+  */
+ 
+ #include <rex/logging.h>
++#include <rex/cvar.h>
+ #include <rex/math.h>
+ #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
+ 
++REXCVAR_DECLARE(bool, d3d12_debug);
++
+ namespace rex::ui::d3d12 {
+ 
+ // Align to D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT not to waste any space if
+@@ -90,6 +93,13 @@ GraphicsUploadBufferPool::Page* D3D12UploadBufferPool::CreatePageImplementation(
+     return nullptr;
+   }
+   // Unmapping will be done implicitly when the resource is destroyed.
++  if (REXCVAR_GET(d3d12_debug) && diagnostic_pages_logged_ < 64) {
++    buffer->SetName(L"D3D12 upload pool page");
++    REXLOG_INFO("Upload pool 0x{:016X} page {}: GPU VA=0x{:016X} bytes=0x{:X}",
++                reinterpret_cast<uintptr_t>(this), diagnostic_pages_logged_,
++                buffer->GetGPUVirtualAddress(), page_size_);
++    ++diagnostic_pages_logged_;
++  }
+   return new D3D12Page(buffer.Get(), mapping);
+ }
+ 
+diff --git a/src/ui/d3d12/d3d12_util.cpp b/src/ui/d3d12/d3d12_util.cpp
+index 28b44a4df8b98a0efa620bc86e08368082dd1ae5..9b26f2aae4171becc2e3722d156f20fb639d7b90 100644
+--- a/src/ui/d3d12/d3d12_util.cpp
++++ b/src/ui/d3d12/d3d12_util.cpp
+@@ -10,12 +10,73 @@
+  */
+ 
+ #include <rex/assert.h>
++#include <algorithm>
++#include <string_view>
++#include <vector>
+ #include <rex/logging.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
+ 
+ namespace rex::ui::d3d12 {
+ namespace util {
+ 
++uint64_t LogDeviceRemovalEvidence(ID3D12Device* device) {
++  Microsoft::WRL::ComPtr<ID3D12InfoQueue> queue;
++  if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&queue)))) {
++    const uint64_t count = queue->GetNumStoredMessagesAllowedByRetrievalFilter();
++    REXLOG_ERROR("D3D12 debug queue: {} stored messages (reporting first/last 32)", count);
++    for (uint64_t slot = 0; slot < std::min<uint64_t>(count, 64); ++slot) {
++      const uint64_t index = count > 64 && slot >= 32 ? count - 64 + slot : slot;
++      SIZE_T bytes = 0;
++      if (FAILED(queue->GetMessage(index, nullptr, &bytes)) ||
++          bytes < sizeof(D3D12_MESSAGE) || bytes > 65536) continue;
++      std::vector<uint8_t> storage(bytes);
++      auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
++      if (SUCCEEDED(queue->GetMessage(index, message, &bytes)) && message->pDescription) {
++        size_t length = std::min<size_t>(message->DescriptionByteLength, 2048);
++        if (length && message->pDescription[length - 1] == '\0') --length;
++        REXLOG_ERROR("D3D12 debug message {}: severity={} id={} {}", index,
++                     static_cast<uint32_t>(message->Severity), static_cast<uint32_t>(message->ID),
++                     std::string_view(message->pDescription, length));
++      }
++    }
++  } else {
++    REXLOG_ERROR("D3D12 debug queue unavailable");
++  }
++  Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedData> dred;
++  if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dred)))) return 0;
++  D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs{};
++  if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&breadcrumbs))) {
++    uint32_t nodes = 0;
++    for (auto* node = breadcrumbs.pHeadAutoBreadcrumbNode; node && nodes < 16;
++         node = node->pNext, ++nodes) {
++      if (!node->pLastBreadcrumbValue || !node->pCommandHistory) continue;
++      const uint32_t last = std::min(*node->pLastBreadcrumbValue, node->BreadcrumbCount);
++      REXLOG_ERROR("DRED breadcrumb: completed {} of {} ops", last, node->BreadcrumbCount);
++      for (uint32_t i = last > 3 ? last - 3 : 0;
++           i < std::min(last + 1, node->BreadcrumbCount); ++i) {
++        REXLOG_ERROR("  [{}] op type {}{}", i, static_cast<uint32_t>(node->pCommandHistory[i]),
++                     i == last ? " <-- next incomplete" : "");
++      }
++    }
++  }
++  D3D12_DRED_PAGE_FAULT_OUTPUT fault{};
++  if (FAILED(dred->GetPageFaultAllocationOutput(&fault)) || !fault.PageFaultVA) return 0;
++  REXLOG_ERROR("DRED page fault at VA 0x{:016X}", fault.PageFaultVA);
++  const auto log_allocations = [](const char* kind, const D3D12_DRED_ALLOCATION_NODE* node) {
++    uint32_t count = 0;
++    for (; node && count < 16; node = node->pNext, ++count) {
++      REXLOG_ERROR("DRED {} allocation {}: type={} name={}", kind, count,
++                   static_cast<uint32_t>(node->AllocationType),
++                   node->ObjectNameA ? node->ObjectNameA : "<unnamed>");
++    }
++    if (!count) REXLOG_ERROR("DRED {} allocation list empty", kind);
++    if (node) REXLOG_ERROR("DRED {} allocation list truncated", kind);
++  };
++  log_allocations("existing", fault.pHeadExistingAllocationNode);
++  log_allocations("recently freed", fault.pHeadRecentFreedAllocationNode);
++  return fault.PageFaultVA;
++}
++
+ ID3D12RootSignature* CreateRootSignature(const D3D12Provider& provider,
+                                          const D3D12_ROOT_SIGNATURE_DESC& desc) {
+   ID3DBlob* blob;

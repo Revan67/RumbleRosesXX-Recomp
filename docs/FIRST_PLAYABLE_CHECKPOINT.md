@@ -30,3 +30,17 @@ raw research evidence are not part of the source checkpoint or public release.
 This document is a sanitized milestone summary. Detailed local provenance is
 maintained separately; a source checkout alone does not reproduce the modified
 SDK or provide any game content.
+
+## Follow-up: clean SDK and restart/load checkpoint
+
+The pinned SDK source patches are now available in `patches/rexglue-sdk` with
+their upstream license. Patch replay, a clean SDK Release build, an isolated
+host build and offline nonlocal/switch tests passed. The user reported save/load,
+match play, a subsequent save and quit on the candidate on November 9, 2026;
+on November 27 the saved state was confirmed to load after restart.
+
+These are scoped implementation/user observations, not a stable-release claim.
+The intro video has reported moving black spots on its logo and some stutter.
+Full match results/progression, repeated complete matches, broader content and
+orderly shutdown remain unverified. Raw test logs, saves and binary artifacts
+remain local; the earlier checkpoint and its limitations are preserved above.

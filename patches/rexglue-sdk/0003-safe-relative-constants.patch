@@ -1,0 +1,84 @@
+diff --git a/include/rex/graphics/pipeline/shader/dxbc_translator.h b/include/rex/graphics/pipeline/shader/dxbc_translator.h
+index 3b0fd618aa8cc701fcff80ef23e3263eef91bfb4..9e7a3ac2e2c24e67860821be8b3bea1712d0177f 100644
+--- a/include/rex/graphics/pipeline/shader/dxbc_translator.h
++++ b/include/rex/graphics/pipeline/shader/dxbc_translator.h
+@@ -915,6 +915,8 @@ class DxbcShaderTranslator : public ShaderTranslator {
+   // Whether to write comments with the original Xenos instructions to the
+   // output.
+   bool emit_source_map_;
++  // Local opt-in PC safety experiment, fixed for this translator's lifetime.
++  bool safe_relative_constants_;
+ 
+   // Vendor ID of the GPU manufacturer, for toggling unsupported features.
+   ui::GraphicsProvider::GpuVendorID vendor_id_;
+diff --git a/src/graphics/pipeline/shader/dxbc_translator.cpp b/src/graphics/pipeline/shader/dxbc_translator.cpp
+index 2c31a0e865855fe48e9fe6808e3f49c0ee4367e5..46852f90ea8525af76b73b4de214f057afcba3fb 100644
+--- a/src/graphics/pipeline/shader/dxbc_translator.cpp
++++ b/src/graphics/pipeline/shader/dxbc_translator.cpp
+@@ -22,11 +22,15 @@
+ #include <rex/graphics/pipeline/shader/dxbc_translator.h>
+ #include <rex/graphics/xenos.h>
+ #include <rex/math.h>
++#include <rex/logging.h>
+ #include <rex/ui/graphics_provider.h>
+ 
+ REXCVAR_DEFINE_BOOL(dxbc_switch, true, "GPU/Shader", "Use switch statements in DXBC");
+ 
+ REXCVAR_DEFINE_BOOL(dxbc_source_map, false, "GPU/Shader", "Generate source maps for DXBC");
++REXCVAR_DEFINE_BOOL(dxbc_safe_relative_constants, false, "GPU/Shader",
++                    "Experimental zero-result loads outside allocated relative float constants")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
+ namespace rex::graphics {
+ using namespace ucode;
+@@ -70,9 +74,14 @@ DxbcShaderTranslator::DxbcShaderTranslator(ui::GraphicsProvider::GpuVendorID ven
+       msaa_2x_supported_(msaa_2x_supported),
+       draw_resolution_scale_x_(draw_resolution_scale_x),
+       draw_resolution_scale_y_(draw_resolution_scale_y),
+-      emit_source_map_(force_emit_source_map || REXCVAR_GET(dxbc_source_map)) {
++      emit_source_map_(force_emit_source_map || REXCVAR_GET(dxbc_source_map)),
++      safe_relative_constants_(REXCVAR_GET(dxbc_safe_relative_constants)) {
+   assert_not_zero(draw_resolution_scale_x);
+   assert_not_zero(draw_resolution_scale_y);
++  static std::atomic<bool> safe_mode_reported{false};
++  if (safe_relative_constants_ && !safe_mode_reported.exchange(true)) {
++    REXLOG_INFO("DXBC safe-relative-constant experiment enabled: zero outside allocated float range");
++  }
+   // Don't allocate again and again for the first shader.
+   shader_code_.reserve(8192);
+   shader_object_.reserve(16384);
+@@ -1347,8 +1356,32 @@ dxbc::Src DxbcShaderTranslator::LoadOperand(const InstructionOperand& operand,
+       } else {
+         assert_true(constant_register_map.float_dynamic_addressing);
+       }
+-      src = dxbc::Src::CB(cbuffer_index_float_constants_,
+-                          uint32_t(CbufferRegister::kFloatConstants), index);
++      if (safe_relative_constants_ &&
++          operand.storage_addressing_mode != InstructionStorageAddressingMode::kAbsolute) {
++        // Guard the actual sum, not only a0. The unsigned comparison also
++        // rejects negative indices. Never clamp to a different valid constant.
++        uint32_t temp = PushSystemTemp();
++        temp_pushed_out = true;
++        dxbc::Src relative = operand.storage_addressing_mode ==
++                                        InstructionStorageAddressingMode::kAddressRegisterRelative
++                                    ? dxbc::Src::R(system_temp_ps_pc_p0_a0_, dxbc::Src::kWWWW)
++                                    : dxbc::Src::R(system_temp_aL_, dxbc::Src::kXXXX);
++        a_.OpIAdd(dxbc::Dest::R(temp, 0b0001), relative,
++                  dxbc::Src::LU(operand.storage_index));
++        a_.OpULT(dxbc::Dest::R(temp, 0b0010), dxbc::Src::R(temp, dxbc::Src::kXXXX),
++                 dxbc::Src::LU(constant_register_map.float_count));
++        a_.OpIf(true, dxbc::Src::R(temp, dxbc::Src::kYYYY));
++        a_.OpMov(dxbc::Dest::R(temp),
++                 dxbc::Src::CB(cbuffer_index_float_constants_,
++                               uint32_t(CbufferRegister::kFloatConstants), dxbc::Index(temp, 0)));
++        a_.OpElse();
++        a_.OpMov(dxbc::Dest::R(temp), dxbc::Src::LF(0.0f));
++        a_.OpEndIf();
++        src = dxbc::Src::R(temp);
++      } else {
++        src = dxbc::Src::CB(cbuffer_index_float_constants_,
++                            uint32_t(CbufferRegister::kFloatConstants), index);
++      }
+     } break;
+     default:
+       assert_unhandled_case(operand.storage_source);

@@ -7,13 +7,15 @@
 
 An educational, work-in-progress native PC recompilation of the Xbox 360 version of Rumble Roses XX. XenonRecomp translates the original PowerPC program into C++, while the project runtime supplies the host memory, kernel, filesystem, input, timing, and graphics interfaces expected by that code.
 
+The objective is playable, reliable native Windows execution using original, legally supplied assets—not Xbox 360 hardware reproduction. Keep the working hybrid and evaluate native replacements by game-visible behavior. Next acceptance priorities are repeatable complete matches, rendering/audio/controls, save/load through restart and stability; one played match is a milestone, not completion.
+
 The original CPU/runtime baseline builds and reaches an internal frame loop. An isolated ReXGlue/Xenos hybrid opens a native window and renders recognizable in-engine scenes with controller input and audio. Local tests confirmed two saves and one load. On October 25, 2026, a user reached and played a match with the native nonlocal-return repair and experimental safe shader loads enabled. This is a first-playable checkpoint, not a stable release: full-match completion, clean shutdown and sustained gameplay have not been established.
 
 See the [first playable checkpoint](docs/FIRST_PLAYABLE_CHECKPOINT.md) and [developer build guide](BUILDING.md). A user-supplied-ISO launcher is planned but not yet implemented. Repository participation and any future distribution are governed by [LEGAL.md](LEGAL.md).
 
 Private research, raw traces and machine-specific guidance stay local. Published findings distinguish observed implementation behavior from unverified platform assumptions. See [contribution guidance](CONTRIBUTING.md).
 
-The first playable run used a locally modified ReXGlue GPU plugin with experimental safe relative constant loads. That SDK modification is not included in this source snapshot; a stock dependency build must not be assumed equivalent to the tested build.
+The first playable run used a modified ReXGlue GPU plugin with experimental safe relative constant loads. The [SDK patch set](patches/rexglue-sdk/README.md) preserves those source changes and their upstream license. Patch replay, a clean SDK Release build and a separate host build passed. The isolated candidate was subsequently used for save/load and match play; a saved state was confirmed to load after restarting that candidate. A stock dependency build must not be assumed equivalent to this configuration.
 
 ## Legal requirements
 
@@ -61,8 +63,9 @@ The build deliberately limits large recompilation units to two concurrent compil
 - The game reaches a sustained internal frame loop.
 - A native Windows window and XInput controller path operate.
 - The isolated hybrid renders in-engine scenes with audio and controller input.
-- Two local saves and one load were confirmed; general save reliability is not verified.
+- Save/load and persistence across a restart were user-confirmed on the isolated clean-SDK candidate; general save reliability is not verified.
 - First playable match confirmed locally on October 25, 2026; earlier CPU and GPU failures remain relevant regression cases.
+- Known issues include user-reported moving black spots on the logo inside the intro video and some intro stutter; their causes remain unverified. Full-match results/progression, broad content coverage and orderly shutdown are not yet established.
 - The launcher, installer, and playable release are not available yet.
 
 This is experimental research software and is not currently a playable release. Rumble Roses, Xbox, Microsoft, Konami, and their associated names and marks belong to their respective owners. This project is unofficial and is not endorsed by or affiliated with them.

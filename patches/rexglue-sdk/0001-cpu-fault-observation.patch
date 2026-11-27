@@ -1,0 +1,80 @@
+diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
+index 2b930058bad8ef3c9832e82e0e9b50491425ec82..7113d193c21add3f4ddd5449f38af10d32933572 100644
+--- a/src/system/mmio_handler.cpp
++++ b/src/system/mmio_handler.cpp
+@@ -21,6 +21,10 @@
+ #include <rex/system/mmio_handler.h>
+ #include <rex/types.h>
+ 
++#if REX_PLATFORM_WIN32
++#include <Windows.h>
++#endif
++
+ using namespace rex::arch;
+ 
+ namespace rex::runtime {
+@@ -417,8 +421,35 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+     // The address is not found within any range, so either a write watch or an
+     // actual access violation.
+     if (access_violation_callback_) {
+-      return access_violation_callback_(std::move(lock), access_violation_callback_context_,
+-                                        fault_host_address, is_write);
++      const bool handled = access_violation_callback_(std::move(lock), access_violation_callback_context_,
++                                                      fault_host_address, is_write);
++      if (!handled) {
++#if REX_PLATFORM_WIN32
++        HMODULE module = nullptr;
++        char name[MAX_PATH] = {};
++        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                                  GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                              reinterpret_cast<LPCSTR>(ex->pc()), &module)) {
++          GetModuleFileNameA(module, name, MAX_PATH);
++        }
++        const char* basename = std::strrchr(name, '\\');
++        REXLOG_ERROR("Unhandled host instruction: module={} RVA={:016X} PC={:016X}",
++                     basename ? basename + 1 : name,
++                     ex->pc() - reinterpret_cast<uintptr_t>(module), ex->pc());
++#else
++        REXLOG_ERROR("Unhandled host instruction: PC={:016X}", ex->pc());
++#endif
++#if REX_ARCH_AMD64
++        const auto* host = ex->thread_context();
++        REXLOG_ERROR("Fault host registers: rax={:016X} rcx={:016X} rdx={:016X} "
++                     "rsi={:016X} rdi={:016X} rsp={:016X} rbp={:016X} "
++                     "r8={:016X} r9={:016X} r10={:016X} r11={:016X} "
++                     "r12={:016X} r13={:016X} r14={:016X} r15={:016X}",
++                     host->rax, host->rcx, host->rdx, host->rsi, host->rdi, host->rsp, host->rbp,
++                     host->r8, host->r9, host->r10, host->r11, host->r12, host->r13, host->r14, host->r15);
++#endif
++      }
++      return handled;
+     }
+     return false;
+   }
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index 76cc87766d34672914d99a6ea7644f549b8b3e85..e7bd56e50e3825e825ba8ae9a7cd544a7bdcb16c 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -27,6 +27,7 @@
+ #include <rex/stream.h>
+ #include <rex/system/function_dispatcher.h>
+ #include <rex/system/mmio_handler.h>
++#include <rex/system/thread_state.h>
+ #include <rex/system/xmemory.h>
+ #include <rex/thread.h>
+ 
+@@ -547,6 +548,14 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
+         "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
+         is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),
+         rex::thread::current_thread_id());
++    if (auto* thread_state = rex::runtime::ThreadState::Get()) {
++      const PPCContext* ctx = thread_state->context();
++      REXSYS_ERROR(
++          "Guest fault context: LR={:08X} CTR={:08X} r1={:08X} r3={:08X} r4={:08X} "
++          "r5={:08X} r6={:08X} r11={:08X}",
++          ctx->lr, ctx->ctr.u32, ctx->r1.u32, ctx->r3.u32, ctx->r4.u32, ctx->r5.u32,
++          ctx->r6.u32, ctx->r11.u32);
++    }
+     return false;
+   }
+ 
