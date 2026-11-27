@@ -97,7 +97,7 @@ If CMake selects a non-Windows `ld` instead of the Visual Studio linker, add `-D
 
 ## 5. Run only as a bounded local experiment
 
-The executable accepts an extracted-game directory and a writable local-state directory. Local testing has saved twice and loaded once, and one bounded match was played with additional local corrections and a modified GPU plugin. Crash recovery, full-match completion and orderly shutdown are not proven. Keep experiments time- and resource-bounded, and retain all local logs, saves, and captures outside Git. The planned launcher and user-facing ISO import flow do not exist yet.
+The executable accepts an extracted-game directory and a writable local-state directory. The isolated patched-SDK candidate has user-confirmed save/load, match play and a later restart/load of the tested save. Full match results/progression, repeated complete matches, crash recovery and orderly shutdown remain unverified. Moving black spots on the logo inside the intro video and intro stutter are reported defects with unknown causes. Keep experiments time- and resource-bounded, and retain all local logs, saves, and captures outside Git. The planned launcher and user-facing ISO import flow do not exist yet.
 
 For a short menu-only smoke test, run `./tools/test_windowed_boot.ps1 -ObservationSeconds 30 -MemoryLimitGiB 2 -LogLimitMiB 16` from this repository's root. The extended-test defaults are 8 GiB working set and 64 MiB of text logs; both limits can be lowered explicitly. Logs stay under ignored `build/hybrid/`. The timer defaults to 120 seconds and accepts up to 1800 seconds. These process limits cannot prevent a GPU timeout. Interactive GPU-risk testing requires an available user; do not repeatedly provoke device loss.
 

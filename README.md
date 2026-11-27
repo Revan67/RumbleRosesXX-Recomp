@@ -24,7 +24,7 @@ This repository does not include the game executable, disc image, extracted asse
 ## Toolchain
 
 - Visual Studio 2022 with Desktop development with C++ and LLVM/clang-cl
-- CMake 3.20 or newer
+- CMake 3.25 or newer for the gameplay hybrid
 - Ninja
 - [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), cloned recursively into `tools/XenonRecomp`
 - [extract-xiso](https://github.com/XboxDev/extract-xiso), when ISO extraction is required
@@ -45,7 +45,12 @@ The recompilation configuration is `config/rrxx.toml`. Generate `config/rrxx_swi
 
 ## Build
 
-Run these commands from a Visual Studio Developer PowerShell configured for x64:
+The gameplay target is `rrxx_windowed`. Follow [BUILDING.md](BUILDING.md) for
+the pinned SDK patches, local translation/overlays, DLL selection and bounded
+launch commands. Run its commands from an x64 Visual Studio Developer PowerShell.
+
+The following builds only the preserved earlier CPU baseline; it does not build
+the playable windowed hybrid:
 
 ```powershell
 cmake -S . -B build -G Ninja `
